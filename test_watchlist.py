@@ -126,3 +126,77 @@ if fails:
         print("  -", f)
     raise SystemExit(1)
 print("all watchlist tests passed")
+
+
+# ---- page monitoring -------------------------------------------------
+import tempfile, pathlib
+
+html_day1 = """
+<a href="/products/raze-black">Raze</a>
+<a href="/products/raze-black?variant=1">dup</a>
+<a href="/collections/sale/products/nero-black">Nero</a>
+<a href="/products/all">nav noise</a>
+<a href="/pages/about">not a product</a>
+"""
+check("handles day1", W.extract_product_handles(html_day1),
+      ["raze-black", "nero-black"])
+check("empty html", W.extract_product_handles(""), [])
+check("none html", W.extract_product_handles(None), [])
+
+# pages.txt parsing
+e, p = W.parse_pages_file(
+    "# c\nhttps://shop.pk/pages/deals  # my note\nnot-a-url\n")
+check("pages parsed", len(e), 1)
+check("pages site", e[0]["site"], "shop.pk")
+check("pages note", e[0]["note"], "my note")
+check("pages problem", len(p), 1)
+
+
+# ---- page diff across two runs --------------------------------------
+tmp2 = pathlib.Path(tempfile.mkdtemp())
+WT.DB_PATH = tmp2 / "p.db"
+WT.PAGES_PATH = tmp2 / "pages.txt"
+WT.PAGES_PATH.write_text("https://shop.pk/pages/deals  # Deals\n")
+WT.REQUEST_PAUSE = 0
+
+PAGE = {"html": '<a href="/products/aaa">a</a><a href="/products/bbb">b</a>'}
+WT.fetch_text = lambda url: PAGE["html"]
+WT.fetch_json = lambda url: {
+    "title": url.rsplit("/", 1)[-1].replace(".js", "").upper(),
+    "variants": [{"id": 1, "title": "XL", "price": 100000,
+                  "compare_at_price": 200000, "available": True}],
+}
+
+conn2 = WT.connect()
+r1 = conn2.execute("INSERT INTO runs (started_at) VALUES ('t1')").lastrowid
+ch1, rows1, err1 = WT.collect_pages(conn2, r1)
+check("page run1 no errors", err1, [])
+check("page run1 first_time", ch1[0]["first_time"], True)
+check("page run1 total", ch1[0]["total"], 2)
+
+# Day 2: bbb gone, ccc arrives.
+PAGE["html"] = '<a href="/products/aaa">a</a><a href="/products/ccc">c</a>'
+r2 = conn2.execute("INSERT INTO runs (started_at) VALUES ('t2')").lastrowid
+ch2, rows2, err2 = WT.collect_pages(conn2, r2)
+check("page run2 not first", ch2[0]["first_time"], False)
+check("page run2 added", ch2[0]["added"], ["ccc"])
+check("page run2 removed", ch2[0]["removed"], ["bbb"])
+check("page run2 priced new", [r["handle"] for r in rows2], ["ccc"])
+check("page run2 claimed", WT.build_report(rows2, {})[0]["claimed_drop"], 50.0)
+
+# Day 3: unchanged.
+r3 = conn2.execute("INSERT INTO runs (started_at) VALUES ('t3')").lastrowid
+ch3, rows3, _ = WT.collect_pages(conn2, r3)
+check("page run3 no change", (ch3[0]["added"], ch3[0]["removed"]), ([], []))
+check("page run3 nothing priced", rows3, [])
+
+# A page whose layout broke yields an error, not silence.
+PAGE["html"] = "<html>nothing here</html>"
+r4 = conn2.execute("INSERT INTO runs (started_at) VALUES ('t4')").lastrowid
+ch4, _, err4 = WT.collect_pages(conn2, r4)
+check("broken layout reported", len(err4), 1)
+check("broken layout no changes", ch4, [])
+
+# Rendering must not crash in either mode.
+for md in (True, False):
+    WT.render_page_changes(ch2, markdown=md)

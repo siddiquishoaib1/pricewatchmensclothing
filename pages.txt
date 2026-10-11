@@ -1,0 +1,11 @@
+# Pages to monitor for line-up changes - one URL per line.
+#
+# Use this for hand-built deal pages that are not a collection and so
+# have no JSON endpoint. Each run fetches the page once, pulls out the
+# products linked from it, and reports what was ADDED or REMOVED since
+# the last run. New arrivals are then priced individually.
+#
+# This is about what appears on the page, not about one fixed product.
+# To track a specific item's price, put it in watchlist.txt instead.
+
+https://gomilaintersole.pk/pages/deal-of-the-day   # Gomila deal of the day

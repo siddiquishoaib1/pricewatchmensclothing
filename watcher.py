@@ -39,6 +39,7 @@ import watchlist as W
 
 HERE = Path(__file__).resolve().parent
 WATCHLIST_PATH = HERE / "watchlist.txt"
+PAGES_PATH = HERE / "pages.txt"
 DATA_DIR = HERE / "data"
 DB_PATH = DATA_DIR / "prices.db"
 CSV_PATH = DATA_DIR / "latest_report.csv"
@@ -55,6 +56,38 @@ UA = ("Mozilla/5.0 (compatible; personal-price-watcher/1.0; "
 
 
 # ----------------------------------------------------------- fetching
+
+def fetch_text(url):
+    """GET a URL and return its body as text. Retries like fetch_json."""
+    last = None
+    for attempt in range(RETRIES):
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": UA,
+                "Accept": "text/html,application/xhtml+xml",
+            })
+            ctx = ssl.create_default_context()
+            with urllib.request.urlopen(req, timeout=TIMEOUT,
+                                        context=ctx) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            last = exc
+            if exc.code == 429 and attempt < RETRIES - 1:
+                retry_after = exc.headers.get("Retry-After")
+                try:
+                    wait = int(retry_after)
+                except (TypeError, ValueError):
+                    wait = BACKOFF[min(attempt, len(BACKOFF) - 1)]
+                time.sleep(min(wait, 120))
+                continue
+            break
+        except Exception as exc:          # noqa: BLE001
+            last = exc
+            if attempt < RETRIES - 1:
+                time.sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
+                continue
+    raise RuntimeError(f"{type(last).__name__}: {last}")
+
 
 def fetch_json(url):
     """GET a URL and parse JSON. Raises on failure after retries.
@@ -117,6 +150,14 @@ CREATE TABLE IF NOT EXISTS observations (
     seen_at     TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_variant ON observations(site, variant_id, id);
+CREATE TABLE IF NOT EXISTS page_items (
+    id          INTEGER PRIMARY KEY,
+    run_id      INTEGER NOT NULL,
+    page        TEXT    NOT NULL,
+    handle      TEXT    NOT NULL,
+    seen_at     TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_page ON page_items(page, run_id);
 CREATE TABLE IF NOT EXISTS runs (
     id          INTEGER PRIMARY KEY,
     started_at  TEXT NOT NULL,
@@ -236,6 +277,185 @@ def collect(conn, run_id):
     return rows, errors
 
 
+# ------------------------------------------------------- page watches
+
+# A deal page can list dozens of products. Pricing every one of them on
+# every run would be a crawl; pricing only the new arrivals keeps a
+# daily check down to roughly one request plus a handful.
+MAX_NEW_PRICED = 15
+
+
+def collect_pages(conn, run_id):
+    """Diff each monitored page's product line-up against last run.
+
+    Returns (changes, rows, errors) where changes is a list of dicts
+    describing what was added or removed, and rows are observations for
+    newly added products so their prices enter the history.
+    """
+    if not PAGES_PATH.exists():
+        return [], [], []
+
+    entries, problems = W.parse_pages_file(
+        PAGES_PATH.read_text(encoding="utf-8"))
+    changes, rows = [], []
+    errors = [(f"pages.txt line {n}", msg) for n, msg in problems]
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    for e in entries:
+        label = e["note"] or e["url"]
+        try:
+            html = fetch_text(e["url"])
+        except Exception as exc:               # noqa: BLE001
+            errors.append((label, str(exc)))
+            print(f"  {label[:40]:42s} FAILED  {exc}", file=sys.stderr)
+            continue
+
+        handles = W.extract_product_handles(html)
+        if not handles:
+            errors.append((label, "no product links found - page layout "
+                                  "may have changed"))
+            print(f"  {label[:40]:42s} no products found", file=sys.stderr)
+            continue
+
+        prior = {r["handle"] for r in conn.execute(
+            """SELECT DISTINCT handle FROM page_items
+               WHERE page = ? AND run_id = (
+                   SELECT MAX(run_id) FROM page_items
+                   WHERE page = ? AND run_id < ?)""",
+            (e["url"], e["url"], run_id))}
+
+        conn.executemany(
+            "INSERT INTO page_items (run_id, page, handle, seen_at) "
+            "VALUES (?, ?, ?, ?)",
+            [(run_id, e["url"], h, now) for h in handles],
+        )
+        conn.commit()
+
+        current = set(handles)
+        first_time = not prior
+        added = [h for h in handles if h not in prior]
+        removed = sorted(prior - current)
+
+        # Price the new arrivals so they land in the history too.
+        priced = []
+        for h in added[:MAX_NEW_PRICED]:
+            try:
+                data = fetch_json(W.js_url(e["base"], h))
+            except Exception as exc:           # noqa: BLE001
+                errors.append((f"{label}: {h}", str(exc)))
+                continue
+            variants = data.get("variants") or []
+            cheapest = None
+            for v in variants:
+                p = W.to_rupees(v.get("price"))
+                if p is not None and (cheapest is None
+                                      or p < cheapest["price"]):
+                    cheapest = {"price": p, "v": v}
+            if not cheapest:
+                continue
+            v = cheapest["v"]
+            rec = {
+                "run_id": run_id,
+                "site": e["site"],
+                "variant_id": str(v.get("id")),
+                "handle": h,
+                "title": data.get("title") or h,
+                "category": "page",
+                "size": W.normalise(v.get("title") or ""),
+                "price": cheapest["price"],
+                "compare_at": W.to_rupees(v.get("compare_at_price")),
+                "available": 1 if v.get("available") else 0,
+                "url": W.page_url(e["base"], h),
+                "seen_at": now,
+            }
+            rows.append(rec)
+            priced.append(rec)
+            time.sleep(REQUEST_PAUSE)
+
+        changes.append({
+            "label": label,
+            "url": e["url"],
+            "first_time": first_time,
+            "total": len(handles),
+            "added": added,
+            "removed": removed,
+            "priced": priced,
+            "unpriced": max(0, len(added) - MAX_NEW_PRICED),
+        })
+
+        state = (f"{len(handles)} items, first run" if first_time else
+                 f"{len(handles)} items, +{len(added)} -{len(removed)}")
+        print(f"  {label[:40]:42s} {state}")
+        time.sleep(REQUEST_PAUSE)
+
+    store_rows(conn, rows)
+    return changes, rows, errors
+
+
+def render_page_changes(changes, markdown):
+    """Lines describing page line-up changes, for either output."""
+    out = []
+    for c in changes:
+        if markdown:
+            out += [f"## {c['label']}", "",
+                    f"[{c['url']}]({c['url']}) - {c['total']} items listed",
+                    ""]
+        else:
+            out += [f"\n  {c['label']}  ({c['total']} items listed)",
+                    "  " + "-" * 96]
+
+        if c["first_time"]:
+            line = ("First run - recording what is on the page now. "
+                    "Changes appear from the next run onward.")
+            out.append(f"_{line}_" if markdown else f"    {line}")
+            out.append("")
+            continue
+
+        if not c["added"] and not c["removed"]:
+            line = "No change since the last run."
+            out.append(f"_{line}_" if markdown else f"    {line}")
+            out.append("")
+            continue
+
+        if c["priced"]:
+            if markdown:
+                out += ["**New on the page:**", "",
+                        "| Claim | Now | Was | Item |", "|---:|---:|---:|---|"]
+                for i in c["priced"]:
+                    claim = W.pct_drop(i["compare_at"], i["price"])
+                    claim_s = f"{claim:.0f}%" if claim else "-"
+                    title = i["title"].replace("|", "/")[:60]
+                    if not i["available"]:
+                        title += " - OUT OF STOCK"
+                    out.append(f"| {claim_s} | {money(i['price'])} | "
+                               f"{money(i['compare_at'])} | "
+                               f"[{title}]({i['url']}) |")
+                out.append("")
+            else:
+                out.append("    NEW ON THE PAGE:")
+                for i in c["priced"]:
+                    claim = W.pct_drop(i["compare_at"], i["price"])
+                    claim_s = f"{claim:.0f}%" if claim else "-"
+                    out.append(f"      {claim_s:>5}  {money(i['price']):>11}  "
+                               f"{i['title'][:50]}")
+                out.append("")
+
+        if c["unpriced"]:
+            line = (f"...and {c['unpriced']} more new item(s) not priced "
+                    "this run.")
+            out.append(f"_{line}_" if markdown else f"    {line}")
+            out.append("")
+
+        if c["removed"]:
+            shown = ", ".join(c["removed"][:10])
+            more = (f" (+{len(c['removed']) - 10} more)"
+                    if len(c["removed"]) > 10 else "")
+            line = f"Gone from the page: {shown}{more}"
+            out.append(f"_{line}_" if markdown else f"    {line}")
+            out.append("")
+    return out
+
+
 # ------------------------------------------------------------- report
 
 def build_report(rows, prev):
@@ -267,7 +487,7 @@ def money(v):
     return "-" if v is None else f"Rs {v:,.0f}"
 
 
-def print_report(items, errors, is_first_run):
+def print_report(items, errors, is_first_run, changes=()):
     print()
     print("=" * 100)
     print(f"  WATCHLIST     "
@@ -296,6 +516,13 @@ def print_report(items, errors, is_first_run):
                   f"{money(was):>11}  {i['site']:<18} {title}")
             print(f"    {'':>6}  {'':>6}  {i['url']}")
 
+    if changes:
+        print()
+        print("  " + "=" * 96)
+        print("  DEAL PAGES")
+        for line in render_page_changes(changes, markdown=False):
+            print(line)
+
     if errors:
         print(f"\n  PROBLEMS ({len(errors)}):")
         for name, err in errors:
@@ -306,7 +533,7 @@ def print_report(items, errors, is_first_run):
     print("=" * 100 + "\n")
 
 
-def write_markdown(items, errors, is_first_run):
+def write_markdown(items, errors, is_first_run, changes=()):
     """Write data/REPORT.md - this is what renders on GitHub/phone."""
     MD_PATH.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%a %d %b %Y, %H:%M UTC")
@@ -342,6 +569,9 @@ def write_markdown(items, errors, is_first_run):
                 f"| {i['site']} | [{title}]({i['url']}) |"
             )
         out.append("")
+
+    if changes:
+        out += ["---", ""] + render_page_changes(changes, markdown=True)
 
     if errors:
         out += [f"## Problems ({len(errors)})", ""]
@@ -401,6 +631,8 @@ def main():
     print(f"\nRun #{run_id} - checking watchlist\n")
     prev = previous_prices(conn, run_id)
     rows, errors = collect(conn, run_id)
+    changes, page_rows, page_errors = collect_pages(conn, run_id)
+    errors = errors + page_errors
 
     conn.execute("UPDATE runs SET finished_at = ?, notes = ? WHERE id = ?",
                  (datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -409,17 +641,17 @@ def main():
 
     items = build_report(rows, prev)
     is_first = not prev
-    print_report(items, errors, is_first)
+    print_report(items, errors, is_first, changes)
 
     # Always write, even when empty, so the committed report reflects
     # today rather than silently showing stale results.
-    write_markdown(items, errors, is_first)
+    write_markdown(items, errors, is_first, changes)
     write_csv(items)
     print(f"  Report written to {MD_PATH}")
     print(f"  CSV written to {CSV_PATH}\n")
 
     # Nothing collected at all is a failure, not "no deals today".
-    if not rows:
+    if not rows and not changes:
         print("ERROR: no items were checked.", file=sys.stderr)
         return 1
     if errors and not args.quiet_ok:

@@ -1,4 +1,4 @@
-name: Weekly price check
+name: Daily price check
 
 # NOTE: GitHub's shared runners get 429'd by these stores from the very
 # first request, so this will only produce real data on a SELF-HOSTED
@@ -10,8 +10,8 @@ name: Weekly price check
 
 on:
   # schedule:
-  #   # 04:10 UTC Monday = 09:10 Monday, Pakistan time.
-  #   - cron: "10 4 * * 1"
+  #   # 03:40 UTC = 08:40 Pakistan time, daily.
+  #   - cron: "40 3 * * *"
   workflow_dispatch:
 
 permissions:

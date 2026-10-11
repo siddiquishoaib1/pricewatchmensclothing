@@ -130,3 +130,58 @@ def normalise(value):
     if value is None:
         return ""
     return _re.sub(r"\s+", " ", str(value)).strip().upper()
+
+
+# ---------------------------------------------------- page monitoring
+
+_PRODUCT_HREF = re.compile(r"/products/([A-Za-z0-9][A-Za-z0-9\-_]*)")
+
+# Handles that are navigation or template noise rather than real items.
+_HANDLE_NOISE = {"all", "index", "null", "undefined"}
+
+
+def extract_product_handles(html):
+    """Pull the set of product handles linked from a page's HTML.
+
+    Deal pages are hand-built product grids, not collections, so there
+    is no JSON endpoint for them. Every product tile links to
+    /products/<handle>, so the handles are what we diff run to run.
+
+    Returns handles in first-seen order, deduplicated.
+    """
+    seen, out = set(), []
+    for m in _PRODUCT_HREF.finditer(html or ""):
+        h = m.group(1).lower()
+        if h in _HANDLE_NOISE or h in seen:
+            continue
+        seen.add(h)
+        out.append(h)
+    return out
+
+
+def parse_pages_file(text):
+    """Parse pages.txt - one page URL per line, # comments allowed.
+
+    Returns (entries, problems). Each entry is {site, base, url, note}.
+    """
+    entries, problems = [], []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        url = line.split()[0]
+        note = line[len(url):].strip().lstrip("#").strip() or None
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            problems.append((lineno, f"not an http(s) URL: {url}"))
+            continue
+        site = parsed.netloc.lower()
+        if site.startswith("www."):
+            site = site[4:]
+        entries.append({
+            "site": site.split(":")[0],
+            "base": f"{parsed.scheme}://{parsed.netloc}",
+            "url": url,
+            "note": note,
+        })
+    return entries, problems

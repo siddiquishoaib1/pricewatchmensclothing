@@ -33,6 +33,31 @@ labelled, not hidden. If a pinned variant stops existing because the
 store deleted or re-created the product, that is reported as a problem
 rather than the item quietly vanishing.
 
+## Monitoring a deal page
+
+`pages.txt` holds pages to watch for line-up changes:
+
+```
+https://gomilaintersole.pk/pages/deal-of-the-day   # Gomila deal of the day
+```
+
+Use this for hand-built deal pages that are **not** a collection and so
+have no JSON endpoint. Gomila's deal-of-the-day is exactly that: its
+`deal-of-the-day` collection is empty, while the page itself lists
+around fifty products.
+
+Each run fetches the page once, pulls out the products linked from it,
+and reports what was **added** or **removed** since last time. New
+arrivals are then priced individually, up to 15 per run — pricing all
+fifty every day would be a crawl, and the new ones are the news.
+
+If a page suddenly yields no product links at all, that is reported as
+a problem rather than passing silently as "no change" — it usually
+means the store changed its layout.
+
+Watching a page answers "what showed up today". To track one specific
+product's price, use `watchlist.txt` instead.
+
 ## Running it
 
 ```bash
@@ -56,13 +81,13 @@ on a phone) and `data/latest_report.csv`.
 
 ## Running it automatically
 
-**macOS / Linux** — weekly, Monday 9am. `crontab -e` and add:
+**macOS / Linux** — daily at 8.40am. `crontab -e` and add:
 
 ```
-10 9 * * 1 cd /full/path/to/pricewatch && /usr/bin/python3 watcher.py >> log.txt 2>&1
+40 8 * * * cd /full/path/to/pricewatch && /usr/bin/python3 watcher.py >> log.txt 2>&1
 ```
 
-**Windows** — Task Scheduler → Create Basic Task → Weekly:
+**Windows** — Task Scheduler → Create Basic Task → Daily:
 
 - Program: `python`
 - Arguments: `watcher.py`
@@ -82,7 +107,7 @@ schedule is commented out. To use it, set up a
 [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners)
 on your own machine, change `runs-on: ubuntu-latest` to
 `runs-on: self-hosted`, and uncomment the `schedule:` block. You then
-keep the weekly schedule, the auto-commit and the phone-readable
+keep the daily schedule, the auto-commit and the phone-readable
 report, but requests go out from your own connection.
 
 Plain `cron` or Task Scheduler is simpler and does the same job
@@ -105,7 +130,8 @@ see the commits before "Replace store-wide sweep with watchlist only".
 ```
 watcher.py          the script
 watchlist.py        URL parsing and price helpers
-watchlist.txt       your items - edit this
+watchlist.txt       your pinned products - edit this
+pages.txt           deal pages to monitor - edit this
 test_watchlist.py   tests
 data/REPORT.md      latest report - this is the one to read
 data/latest_report.csv
