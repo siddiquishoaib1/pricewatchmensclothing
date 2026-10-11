@@ -1,0 +1,10 @@
+# price history and generated reports are local data, not source
+prices.db
+latest_report.csv
+log.txt
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
