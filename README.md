@@ -24,8 +24,23 @@ https://www.brandstudio.pk/products/ami-ri-copy?variant=46794715758788   # my no
 ```
 
 - Drop the `?variant=` to watch every size of that product.
+- Add `@weekly` in the note to check that item weekly instead of daily.
 - Tracking junk in the URL (`?_pos=1&_ss=c&...`) is fine and ignored.
 - Lines starting with `#` are ignored; text after the URL is your note.
+
+### How often each item is checked
+
+Items are checked **daily** by default. Add `@weekly` to the note to
+slow one down:
+
+```
+https://narkins.com/products/...?variant=45042560073947   # Narkins fabric @weekly
+```
+
+A weekly item is fetched only once its seven days have passed. On the
+days in between it still appears in the report, carrying its last known
+price and labelled with when it was actually checked — so a slow-moving
+item never silently disappears from the table.
 
 Every item appears in the report every run — whether or not the price
 moved, and whether or not it is in stock. Out-of-stock items are

@@ -200,3 +200,73 @@ check("broken layout no changes", ch4, [])
 # Rendering must not crash in either mode.
 for md in (True, False):
     WT.render_page_changes(ch2, markdown=md)
+
+
+# ---- cadence markers -------------------------------------------------
+check("cadence weekly", W._cadence("thing @weekly"), ("weekly", "thing"))
+check("cadence daily explicit", W._cadence("x @daily"), ("daily", "x"))
+check("cadence default", W._cadence("plain note"), ("daily", "plain note"))
+check("cadence none", W._cadence(None), ("daily", None))
+check("cadence only marker", W._cadence("@weekly"), ("weekly", None))
+check("cadence case", W._cadence("A @WEEKLY")[0], "weekly")
+# A word merely containing "weekly" must not trigger it.
+check("cadence no false match", W._cadence("biweekly thing")[0], "daily")
+
+
+# ---- weekly items are skipped but still reported ---------------------
+tmp3 = pathlib.Path(tempfile.mkdtemp())
+WT.DB_PATH = tmp3 / "c.db"
+WT.WATCHLIST_PATH = tmp3 / "w.txt"
+WT.PAGES_PATH = tmp3 / "none.txt"
+WT.WATCHLIST_PATH.write_text(
+    "https://shop.pk/products/daily-thing?variant=1   # Daily\n"
+    "https://shop.pk/products/weekly-thing?variant=2  # Weekly @weekly\n")
+WT.REQUEST_PAUSE = 0
+
+CALLS = []
+def fake_js(url):
+    CALLS.append(url)
+    h = url.rsplit("/", 1)[-1].replace(".js", "")
+    vid = 1 if h == "daily-thing" else 2
+    return {"title": h, "variants": [
+        {"id": vid, "title": "XL", "price": 100000,
+         "compare_at_price": 200000, "available": True}]}
+WT.fetch_json = fake_js
+
+conn3 = WT.connect()
+r1 = conn3.execute("INSERT INTO runs (started_at) VALUES ('t1')").lastrowid
+rows, carried, errs = WT.collect(conn3, r1)
+check("run1 both fetched", len(rows), 2)
+check("run1 nothing carried", carried, [])
+check("run1 no errors", errs, [])
+
+# Second run the same day: the weekly item is not due.
+CALLS.clear()
+r2 = conn3.execute("INSERT INTO runs (started_at) VALUES ('t2')").lastrowid
+rows2, carried2, _ = WT.collect(conn3, r2)
+check("run2 only daily fetched", len(rows2), 1)
+check("run2 daily is the one fetched", rows2[0]["handle"], "daily-thing")
+check("run2 weekly carried", len(carried2), 1)
+check("run2 carried handle", carried2[0]["handle"], "weekly-thing")
+check("run2 weekly not refetched",
+      any("weekly-thing" in u for u in CALLS), False)
+
+# The carried item must still appear in the report, flagged.
+items2 = WT.build_report(rows2 + carried2, {})
+check("run2 both in report", len(items2), 2)
+flagged = [i for i in items2 if i.get("stale_days") is not None]
+check("run2 one flagged stale", len(flagged), 1)
+check("run2 flagged is weekly", flagged[0]["handle"], "weekly-thing")
+
+# Backdate the weekly item's last check to 8 days ago: now due again.
+conn3.execute(
+    "UPDATE observations SET seen_at = ? WHERE handle = 'weekly-thing'",
+    ["2000-01-01T00:00:00+00:00"])
+conn3.commit()
+CALLS.clear()
+r3 = conn3.execute("INSERT INTO runs (started_at) VALUES ('t3')").lastrowid
+rows3, carried3, _ = WT.collect(conn3, r3)
+check("run3 weekly due again", len(rows3), 2)
+check("run3 nothing carried", carried3, [])
+check("run3 weekly refetched",
+      any("weekly-thing" in u for u in CALLS), True)

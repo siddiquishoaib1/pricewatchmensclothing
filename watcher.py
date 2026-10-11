@@ -196,6 +196,29 @@ def previous_prices(conn, run_id):
             for r in rows}
 
 
+def last_observation(conn, site, handle):
+    """Most recent stored observation for an item, or None."""
+    row = conn.execute(
+        """SELECT * FROM observations
+           WHERE site = ? AND handle = ?
+           ORDER BY id DESC LIMIT 1""",
+        (site, handle)).fetchone()
+    return dict(row) if row else None
+
+
+def days_since(iso_stamp):
+    """Whole days between an ISO stamp and now. None if unparseable."""
+    if not iso_stamp:
+        return None
+    try:
+        then = datetime.fromisoformat(iso_stamp)
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - then).days
+
+
 def store_rows(conn, rows):
     if not rows:
         return
@@ -228,8 +251,25 @@ def collect(conn, run_id):
         errors.append(("watchlist", "no items - add product URLs to "
                                     f"{WATCHLIST_PATH.name}"))
 
+    carried = []
     for e in entries:
         label = e["note"] or e["handle"]
+
+        # A non-daily item is only fetched once its interval has passed.
+        # On the days it is skipped we carry its last known state into
+        # the report, so it does not silently vanish from the table.
+        wait_days = W.CADENCE_DAYS.get(e.get("every", "daily"), 0)
+        if wait_days:
+            previous = last_observation(conn, e["site"], e["handle"])
+            age = days_since(previous["seen_at"]) if previous else None
+            if previous and age is not None and age < wait_days:
+                stale = dict(previous)
+                stale["stale_days"] = age
+                carried.append(stale)
+                print(f"  {label[:40]:42s} not due ({e['every']}, "
+                      f"checked {age}d ago)")
+                continue
+
         try:
             data = fetch_json(W.js_url(e["base"], e["handle"]))
         except Exception as exc:               # noqa: BLE001
@@ -274,7 +314,7 @@ def collect(conn, run_id):
         time.sleep(REQUEST_PAUSE)
 
     store_rows(conn, rows)
-    return rows, errors
+    return rows, carried, errors
 
 
 # ------------------------------------------------------- page watches
@@ -473,6 +513,7 @@ def build_report(rows, prev):
         item["prev_price"] = old_price
         item["prev_seen"] = old_seen
         item["claimed_drop"] = W.pct_drop(r["compare_at"], r["price"])
+        item.setdefault("stale_days", None)
         out.append(item)
 
     # Biggest real drop first, then biggest claimed, then by name so the
@@ -512,6 +553,8 @@ def print_report(items, errors, is_first_run, changes=()):
             title = i["title"][:42]
             if not i["available"]:
                 title += " [OUT OF STOCK]"
+            if i.get("stale_days") is not None:
+                title += f" (weekly, {i['stale_days']}d ago)"
             print(f"    {real:>6}  {claim:>6}  {money(i['price']):>11}  "
                   f"{money(was):>11}  {i['site']:<18} {title}")
             print(f"    {'':>6}  {'':>6}  {i['url']}")
@@ -564,6 +607,8 @@ def write_markdown(items, errors, is_first_run, changes=()):
             title = i["title"].replace("|", "/")[:60]
             if not i["available"]:
                 title += " - OUT OF STOCK"
+            if i.get("stale_days") is not None:
+                title += f" _(weekly - checked {i['stale_days']}d ago)_"
             out.append(
                 f"| {real} | {claim} | {money(i['price'])} | {money(was)} "
                 f"| {i['site']} | [{title}]({i['url']}) |"
@@ -630,7 +675,7 @@ def main():
 
     print(f"\nRun #{run_id} - checking watchlist\n")
     prev = previous_prices(conn, run_id)
-    rows, errors = collect(conn, run_id)
+    rows, carried, errors = collect(conn, run_id)
     changes, page_rows, page_errors = collect_pages(conn, run_id)
     errors = errors + page_errors
 
@@ -639,7 +684,7 @@ def main():
                   f"{len(rows)} items, {len(errors)} problems", run_id))
     conn.commit()
 
-    items = build_report(rows, prev)
+    items = build_report(rows + carried, prev)
     is_first = not prev
     print_report(items, errors, is_first, changes)
 

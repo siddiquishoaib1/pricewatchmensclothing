@@ -87,6 +87,27 @@ def to_rupees(minor_units):
         return None
 
 
+_CADENCE = re.compile(r"@(daily|weekly)\b", re.I)
+
+# How many days must pass before a non-daily item is checked again.
+CADENCE_DAYS = {"daily": 0, "weekly": 7}
+
+
+def _cadence(note):
+    """Pull an @daily / @weekly marker out of a note.
+
+    Returns (cadence, note_without_marker). Daily is the default, so an
+    unmarked item behaves exactly as before.
+    """
+    if not note:
+        return "daily", note
+    m = _CADENCE.search(note)
+    if not m:
+        return "daily", note
+    cleaned = _CADENCE.sub("", note).strip().strip("-").strip() or None
+    return m.group(1).lower(), cleaned
+
+
 def parse_file(text):
     """Parse watchlist file text.
 
@@ -107,9 +128,10 @@ def parse_file(text):
         except BadEntry as exc:
             problems.append((lineno, str(exc)))
             continue
+        every, note = _cadence(note)
         entries.append({
             "site": site, "base": base, "handle": handle,
-            "variant": variant, "note": note,
+            "variant": variant, "note": note, "every": every,
             "url": page_url(base, handle, variant),
         })
     return entries, problems
