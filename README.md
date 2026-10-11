@@ -1,7 +1,7 @@
 # PK Menswear Price Watcher
 
-Watches 17 Pakistani menswear stores for price drops on **shirts in XL**
-and **shoes in size 45**, and ranks the steepest.
+Watches 17 Pakistani menswear stores for price drops on
+t-shirts, polos, shirts, belts and shoes in your sizes, and ranks the steepest.
 
 It reports two numbers side by side:
 
@@ -117,17 +117,32 @@ try `python3 watcher.py --probe` after moving them from `BLOCKED` into
 
 ## What counts as a match
 
-**Shirts** means shirts proper — casual, formal, denim, flannel,
-oxford. T-shirts, polos, sweatshirts, hoodies, jerseys and vests are
-deliberately excluded. To widen it, edit `_SHIRT_EXCLUDE` in
-`matching.py`.
+Five categories, each with its own sizing rule:
 
-**Size XL** matches `XL`, `X-Large`, `Extra Large` — and deliberately
-not `XXL`, `2XL` or `3XL`.
+| Category | What it catches | Size matched |
+|---|---|---|
+| T-shirts & polos | tees, polo shirts | XL |
+| Casual shirts | casual button-downs, oxford, flannel, denim | XL **or** collar 17 |
+| Formal shirts | formal / dress shirts | collar 17 |
+| Belts | belts (not buckles or belt bags) | waist 34 or 36 |
+| Shoes | all footwear incl. sneakers, slides, sandals | 45 |
 
-**Size 45** matches the various labels these stores use: `45`,
-`EU 45`, `PK 11 | EU 45`, `Male Size 45`. Half sizes like `45.5` are
-excluded.
+**XL** matches `XL`, `X-Large`, `Extra Large` — deliberately not
+`XXL`, `2XL` or `3XL`.
+
+**Collar 17** matches `17`, `17"`, `17 inch` and the metric `43`.
+`17.5` is a different collar and is excluded. `43` is only read as a
+collar on a shirt, so it never collides with shoe size 43.
+
+**Waist 34/36** matches those numbers, plus the metric `85 cm` and
+`90 cm`.
+
+**Size 45** matches `45`, `EU 45`, `PK 11 | EU 45`, `Male Size 45`.
+Half sizes like `45.5` are excluded.
+
+Sweatshirts, hoodies, jerseys, tanks, nightshirts and shirt-dresses
+are excluded from every category. To change any of this, edit the
+patterns at the top of `matching.py`.
 
 Out-of-stock variants never appear in the report.
 

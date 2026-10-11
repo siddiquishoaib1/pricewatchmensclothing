@@ -27,7 +27,7 @@ def check(label, got, want):
 
 
 def make_feed(shirt_price):
-    """One real shirt, one t-shirt (must be ignored), one shoe."""
+    """One of each category, plus variants that must be excluded."""
     return [
         {
             "id": 1, "handle": "oxford-shirt", "title": "Oxford Casual Shirt",
@@ -44,11 +44,14 @@ def make_feed(shirt_price):
             ],
         },
         {
+            # Tees and polos ARE wanted now, at XL.
             "id": 2, "handle": "basic-tee", "title": "Premium T-Shirt",
             "product_type": "Men Tee", "tags": [],
             "options": [{"name": "Size", "position": 1}],
             "variants": [
                 {"id": 201, "option1": "XL", "price": "1000.00",
+                 "compare_at_price": "9000.00", "available": True},
+                {"id": 202, "option1": "XXL", "price": "1000.00",
                  "compare_at_price": "9000.00", "available": True},
             ],
         },
@@ -63,6 +66,29 @@ def make_feed(shirt_price):
                  "compare_at_price": "20000.00", "available": True},
                 {"id": 303, "option1": "45", "price": "7000.00",
                  "compare_at_price": None, "available": False},
+            ],
+        },
+        {
+            # Formal shirt goes by collar, not XL.
+            "id": 4, "handle": "formal", "title": "Men Formal Shirt White",
+            "product_type": "Shirt", "tags": [],
+            "options": [{"name": "Collar", "position": 1}],
+            "variants": [
+                {"id": 401, "option1": "16", "price": "3000.00",
+                 "compare_at_price": "6000.00", "available": True},
+                {"id": 402, "option1": "17", "price": "3000.00",
+                 "compare_at_price": "6000.00", "available": True},
+            ],
+        },
+        {
+            "id": 5, "handle": "belt", "title": "Leather Reversible Belt",
+            "product_type": "Belts", "tags": [],
+            "options": [{"name": "Waist", "position": 1}],
+            "variants": [
+                {"id": 501, "option1": "34", "price": "2000.00",
+                 "compare_at_price": "5000.00", "available": True},
+                {"id": 502, "option1": "40", "price": "2000.00",
+                 "compare_at_price": "5000.00", "available": True},
             ],
         },
     ]
@@ -87,12 +113,21 @@ prev1 = W.previous_prices(conn, run1)
 rows1, errors1 = W.collect(conn, run1)
 
 check("run1 errors", errors1, [])
-# Expect: shirt XL (102) and shoe 45 (302 available, 303 unavailable).
-# The L shirt, the 44 shoe and the t-shirt must all be excluded.
+# Wanted: casual shirt XL (102), tee XL (201), shoe 45 (302 + unavailable
+# 303), formal collar 17 (402), belt waist 34 (501).
+# Excluded: L shirt (101), XXL tee (202), shoe 44 (301), collar 16 (401),
+# belt 40 (502).
 ids1 = sorted(r["variant_id"] for r in rows1)
-check("run1 variants captured", ids1, ["302", "303"] if False else
-      ["102", "302", "303"])
+check("run1 variants captured", ids1,
+      ["102", "201", "302", "303", "402", "501"])
 check("run1 no baseline", prev1, {})
+
+cats = {r["variant_id"]: r["category"] for r in rows1}
+check("casual shirt category", cats["102"], "casual-shirt")
+check("tee category", cats["201"], "tee-polo")
+check("formal category", cats["402"], "formal-shirt")
+check("belt category", cats["501"], "belt")
+check("shoe category", cats["302"], "shoe")
 
 items1 = W.build_report(rows1, prev1, min_drop=10.0)
 # Unavailable 303 must be dropped from the report.
@@ -101,11 +136,11 @@ check("run1 report excludes unavailable",
 # No history yet, so real drops are all None.
 check("run1 no real drops",
       all(i["real_drop"] is None for i in items1), True)
-# In run 1 the shirt sits at its full list price (5000 vs compare_at
-# 5000), so it is correctly NOT a drop. Only the shoe, with its 60%
-# claimed discount, should surface.
-check("run1 item count", len(items1), 1)
-check("run1 surfaces shoe only", items1[0]["variant_id"], "302")
+# In run 1 the casual shirt sits at its full list price (5000 vs
+# compare_at 5000), so it is correctly NOT a drop. The tee, shoe,
+# formal shirt and belt all carry claimed discounts and should surface.
+surfaced1 = sorted(i["variant_id"] for i in items1)
+check("run1 surfaced", surfaced1, ["201", "302", "402", "501"])
 check("run1 full-price shirt excluded",
       all(i["variant_id"] != "102" for i in items1), True)
 
@@ -133,15 +168,22 @@ check("shoe claimed drop", by_id["302"]["claimed_drop"], 60.0)
 check("real drop ranked first", items2[0]["variant_id"], "102")
 
 # ---- threshold ------------------------------------------------------
-items_high = W.build_report(rows2, prev2, min_drop=70.0)
-check("high threshold filters all", len(items_high), 0)
+# At 70% only the tee (1000 from 9000 = 89% claimed) survives.
+items_70 = W.build_report(rows2, prev2, min_drop=70.0)
+check("70pc threshold keeps tee only",
+      sorted(i["variant_id"] for i in items_70), ["201"])
+
+# At 95% nothing qualifies.
+items_95 = W.build_report(rows2, prev2, min_drop=95.0)
+check("95pc threshold filters all", len(items_95), 0)
 
 # ---- csv ------------------------------------------------------------
 W.write_csv(items2)
 csv_text = W.CSV_PATH.read_text(encoding="utf-8")
 check("csv has header", csv_text.splitlines()[0].startswith("category,"), True)
 check("csv has shirt row", "Oxford Casual Shirt" in csv_text, True)
-check("csv excludes tee", "Premium T-Shirt" not in csv_text, True)
+check("csv has tee row", "Premium T-Shirt" in csv_text, True)
+check("csv has belt row", "Leather Reversible Belt" in csv_text, True)
 
 if fails:
     print(f"FAILED ({len(fails)}):")

@@ -41,6 +41,15 @@ DB_PATH = DATA_DIR / "prices.db"
 CSV_PATH = DATA_DIR / "latest_report.csv"
 MD_PATH = DATA_DIR / "REPORT.md"
 
+# Report sections, in order. Keys match matching.classify().
+GROUPS = (
+    ("tee-polo",     "T-shirts & polos - size XL"),
+    ("casual-shirt", "Casual shirts - size XL or collar 17"),
+    ("formal-shirt", "Formal shirts - collar 17"),
+    ("belt",         "Belts - waist 34 / 36"),
+    ("shoe",         "Shoes - size 45"),
+)
+
 PAGE_SIZE = 250
 MAX_PAGES = 40           # safety stop: 10k products per store
 REQUEST_PAUSE = 1.0      # be polite to small shops
@@ -256,7 +265,7 @@ def money(v):
 def print_report(items, errors, is_first_run, min_drop):
     print()
     print("=" * 100)
-    print(f"  PRICE DROPS - shirts XL / shoes 45     "
+    print(f"  PRICE DROPS - menswear watchlist    "
           f"{datetime.now().strftime('%a %d %b %Y, %H:%M')}")
     print("=" * 100)
 
@@ -269,8 +278,7 @@ def print_report(items, errors, is_first_run, min_drop):
     if not items:
         print("\n  Nothing met the threshold this run.\n")
     else:
-        for group, label in (("shirt", "SHIRTS - size XL"),
-                             ("shoe", "SHOES - size 45")):
+        for group, label in GROUPS:
             chunk = [i for i in items if i["category"] == group]
             print(f"\n  {label}  ({len(chunk)})")
             print("  " + "-" * 96)
@@ -304,7 +312,7 @@ def write_markdown(items, errors, is_first_run, min_drop):
     """Write data/REPORT.md - this is what renders on GitHub/phone."""
     MD_PATH.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%a %d %b %Y, %H:%M UTC")
-    out = [f"# Price drops - shirts XL / shoes 45", "",
+    out = [f"# Price drops - menswear watchlist", "",
            f"_Last checked: {stamp}_", ""]
 
     if is_first_run:
@@ -321,8 +329,7 @@ def write_markdown(items, errors, is_first_run, min_drop):
         "original price.", "",
     ]
 
-    for group, label in (("shirt", "Shirts - size XL"),
-                         ("shoe", "Shoes - size 45")):
+    for group, label in GROUPS:
         chunk = [i for i in items if i["category"] == group]
         out += [f"## {label} ({len(chunk)})", ""]
         if not chunk:
