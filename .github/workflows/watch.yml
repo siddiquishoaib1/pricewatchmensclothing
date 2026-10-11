@@ -1,14 +1,21 @@
 name: Weekly price check
 
+# NOTE: GitHub's shared runners get 429'd by these stores from the very
+# first request, so this will only produce real data on a SELF-HOSTED
+# runner on your own machine. See README. Left here on workflow_dispatch
+# so you can trigger it manually once a self-hosted runner is set up.
+#
+# To run on your own machine, change `runs-on: ubuntu-latest` below to
+# `runs-on: self-hosted` and uncomment the schedule.
+
 on:
-  schedule:
-    # 04:10 UTC Monday = 09:10 Monday, Pakistan time.
-    # GitHub queues scheduled jobs, so the real run may be 5-30 min late.
-    - cron: "10 4 * * 1"
-  workflow_dispatch:        # lets you run it on demand from the Actions tab
+  # schedule:
+  #   # 04:10 UTC Monday = 09:10 Monday, Pakistan time.
+  #   - cron: "10 4 * * 1"
+  workflow_dispatch:
 
 permissions:
-  contents: write           # needed to commit the report back
+  contents: write
 
 concurrency:
   group: price-check
@@ -17,7 +24,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
 
     steps:
       - name: Check out repo
@@ -29,17 +36,11 @@ jobs:
           python-version: "3.12"
 
       - name: Run tests
-        run: |
-          python test_matching.py
-          python test_watcher.py
-          python test_watchlist.py
+        run: python test_watchlist.py
 
-      - name: Check prices
-        run: python watcher.py --min-drop 10
+      - name: Check watchlist
+        run: python watcher.py
 
-      # Runs even when the check step failed, so a run that was rate
-      # limited still publishes a report naming the stores that failed.
-      # The job itself still goes red.
       - name: Commit the report
         if: always()
         run: |
@@ -47,7 +48,7 @@ jobs:
           git config user.email "actions@github.com"
           git add data/
           if git diff --staged --quiet; then
-            echo "No change in prices today."
+            echo "No change today."
           else
             git commit -m "Price check $(date -u +'%Y-%m-%d')"
             git push

@@ -113,3 +113,20 @@ def parse_file(text):
             "url": page_url(base, handle, variant),
         })
     return entries, problems
+
+
+def pct_drop(old, new):
+    """Percent drop from old to new. None when not computable or a rise."""
+    if old is None or new is None or old <= 0:
+        return None
+    if new >= old:
+        return None
+    return round((old - new) / old * 100, 1)
+
+
+def normalise(value):
+    """Upper-case, collapse whitespace. None-safe."""
+    import re as _re
+    if value is None:
+        return ""
+    return _re.sub(r"\s+", " ", str(value)).strip().upper()

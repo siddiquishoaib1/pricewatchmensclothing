@@ -1,30 +1,37 @@
-# PK Menswear Price Watcher
+# Price Watcher
 
-Watches 17 Pakistani menswear stores for price drops on
-t-shirts, polos, shirts, belts and shoes in your sizes, and ranks the steepest.
+Watches a list of specific products for price drops and reports where
+each one stands.
 
-It reports two numbers side by side:
+Two numbers per item:
 
 | Column | Meaning |
 |---|---|
-| **REAL** | How far the price actually fell since the last run |
-| **CLAIM** | Discount off the store's own crossed-out "original" price |
+| **Real** | How far the price actually fell since the last run |
+| **Claim** | Discount off the store's own crossed-out "original" price |
 
-The REAL column is the one to trust. CLAIM is included so you can spot
-inflated originals — an item showing 60% off that has never actually
-moved is marketing, not a deal.
+**Real** is the one to trust. **Claim** is shown so you can spot
+inflated originals — an item claiming 60% off whose price has never
+actually moved is marketing, not a deal.
 
-## Requirements
+## The watchlist
 
-Python 3.8 or newer. Nothing to install — standard library only.
+`watchlist.txt` holds the items. Paste the URL straight from your
+browser, keeping the `?variant=...` part to pin one specific size:
 
-Check what you have:
-
-```bash
-python3 --version
+```
+https://www.brandstudio.pk/products/ami-ri-copy?variant=46794715758788   # my note
 ```
 
-On Windows, use `python` instead of `python3` in every command below.
+- Drop the `?variant=` to watch every size of that product.
+- Tracking junk in the URL (`?_pos=1&_ss=c&...`) is fine and ignored.
+- Lines starting with `#` are ignored; text after the URL is your note.
+
+Every item appears in the report every run — whether or not the price
+moved, and whether or not it is in stock. Out-of-stock items are
+labelled, not hidden. If a pinned variant stops existing because the
+store deleted or re-created the product, that is reported as a problem
+rather than the item quietly vanishing.
 
 ## Running it
 
@@ -32,182 +39,90 @@ On Windows, use `python` instead of `python3` in every command below.
 python3 watcher.py
 ```
 
-First run takes a few minutes (it pages through every store's full
-catalogue at roughly one request per second, deliberately gentle on
-small shops). It builds `prices.db` and prints a report.
+Nothing to install — Python 3.8+ and the standard library only. On
+Windows use `python` instead of `python3`.
 
-**The first run cannot show REAL drops** — there is no history to
-compare against yet. Everything will be in the CLAIM column. Run it
-again the next day and real drops start appearing.
-
-Other options:
+The first run has no history to compare against, so **Real** will be
+empty and everything sits in **Claim**. Run it again later and real
+drops appear.
 
 ```bash
-python3 watcher.py --min-drop 20    # only drops of 20% or more
-python3 watcher.py --report-only    # reprint last report, no fetching
-python3 watcher.py --probe          # check which stores respond
+python3 watcher.py --report-only   # reprint last report, no fetching
+python3 watcher.py --quiet-ok      # exit 0 even if some items fail
 ```
 
-Each run also writes `latest_report.csv`.
+Each run writes `data/REPORT.md` (renders as a table on GitHub, works
+on a phone) and `data/latest_report.csv`.
 
-## Automatic weekly runs (already set up)
+## Running it automatically
 
-A GitHub Action runs this every **Monday at 09:10 Pakistan time**,
-with no need for your computer to be on, and commits the result back
-to this repo.
-
-**To read today's drops, open [`data/REPORT.md`](data/REPORT.md).**
-It renders as a table on github.com, so it works fine on a phone.
-
-To run it immediately instead of waiting: repo → **Actions** tab →
-*Weekly price check* → **Run workflow**.
-
-To change the time, edit the `cron` line in
-`.github/workflows/watch.yml`. It is in UTC, so Pakistan time minus
-five hours. GitHub also queues scheduled jobs, so the actual run can
-be 5-30 minutes later than scheduled.
-
-If you want an email when prices move, go to your GitHub
-**Settings → Notifications** and enable notifications for your own
-repository activity — you will then get a mail per commit the watcher
-makes, and it only commits on days something actually changed.
-
-## Running it yourself instead
-
-**macOS / Linux** — run weekly on Monday at 9am. Open your crontab with
-`crontab -e` and add:
+**macOS / Linux** — weekly, Monday 9am. `crontab -e` and add:
 
 ```
-0 9 * * 1 cd /full/path/to/pricewatch && /usr/bin/python3 watcher.py >> log.txt 2>&1
+10 9 * * 1 cd /full/path/to/pricewatch && /usr/bin/python3 watcher.py >> log.txt 2>&1
 ```
 
-**Windows** — open Task Scheduler → Create Basic Task → Weekly →
-Start a program:
+**Windows** — Task Scheduler → Create Basic Task → Weekly:
 
 - Program: `python`
 - Arguments: `watcher.py`
 - Start in: the folder containing `watcher.py`
 
-Then read `log.txt`, or run `python watcher.py --report-only` whenever
-you want to see the latest.
+### Why not GitHub Actions?
 
-## Stores covered
+It was tried and it does not work. These stores return
+`429 Too Many Requests` to GitHub's shared runner IPs **from the very
+first request** — all 17 stores, twice, including after backoff was
+raised to honour `Retry-After` and wait up to 90 seconds. It is not a
+volume problem that patience fixes; the datacentre IP is simply
+refused.
 
-brandstudio · turbobrandsfactory · boutiquederoyal · dealsexpress ·
-designdistrict · gomilaintersole · ismailfarid · silentluxury ·
-weebyshoes · aspire · alfatah · saleemfabrics · leftoversden ·
-enemmall · justbrands · casualcollection · amazonleftover
+The workflow in `.github/workflows/watch.yml` is left in place but its
+schedule is commented out. To use it, set up a
+[self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners)
+on your own machine, change `runs-on: ubuntu-latest` to
+`runs-on: self-hosted`, and uncomment the `schedule:` block. You then
+keep the weekly schedule, the auto-commit and the phone-readable
+report, but requests go out from your own connection.
 
-## Stores NOT covered, and why
+Plain `cron` or Task Scheduler is simpler and does the same job
+locally.
 
-| Store | Reason |
-|---|---|
-| hopkicks.pk | robots.txt disallows automated access |
-| accoutreclothing.com (Accoutre) | blocks non-browser requests |
-| ahmedfabricsinternational.com | robots.txt disallows automated access |
-| amoosajeesons.com | robots.txt disallows automated access |
-| calabria.com.pk | server error on the product feed |
-| brandedkicks.pk | server error on the product feed |
-| aieopeson (AliExpress) | marketplace seller, no storefront feed |
+## History
 
-The robots.txt ones are a deliberate "no" from the site owner, so the
-script respects it. The two erroring stores may simply have been down —
-try `python3 watcher.py --probe` after moving them from `BLOCKED` into
-`SITES` in `sites.py`.
+This started as a store-wide sweep across 17 Pakistani menswear sites,
+filtering whole catalogues by size. That was removed: the rate
+limiting above made it unworkable from anywhere but a home connection,
+and most of those stores never populate a "compare at" price anyway,
+so there was little to detect. Watching named items is cheaper, more
+reliable, and reports on exactly what you care about.
 
-## What counts as a match
-
-Five categories, each with its own sizing rule:
-
-| Category | What it catches | Size matched |
-|---|---|---|
-| T-shirts & polos | tees, polo shirts | XL |
-| Casual shirts | casual button-downs, oxford, flannel, denim | XL **or** collar 17 |
-| Formal shirts | formal / dress shirts | collar 17 |
-| Belts | belts (not buckles or belt bags) | waist 34 or 36 |
-| Shoes | all footwear incl. sneakers, slides, sandals | 45 |
-
-**XL** matches `XL`, `X-Large`, `Extra Large` — deliberately not
-`XXL`, `2XL` or `3XL`.
-
-**Collar 17** matches `17`, `17"`, `17 inch` and the metric `43`.
-`17.5` is a different collar and is excluded. `43` is only read as a
-collar on a shirt, so it never collides with shoe size 43.
-
-**Waist 34/36** matches those numbers, plus the metric `85 cm` and
-`90 cm`.
-
-**Size 45** matches `45`, `EU 45`, `PK 11 | EU 45`, `Male Size 45`.
-Half sizes like `45.5` are excluded.
-
-Sweatshirts, hoodies, jerseys, tanks, nightshirts and shirt-dresses
-are excluded from every category. To change any of this, edit the
-patterns at the top of `matching.py`.
-
-Out-of-stock variants never appear in the report.
-
-## Tests
-
-```bash
-python3 test_matching.py
-python3 test_watcher.py
-```
-
-The first checks size parsing and shirt/shoe classification against
-label formats taken from the real feeds. The second simulates two runs
-a day apart and verifies a genuine drop is told apart from a fake
-claimed discount.
+The sweep's code is still in git history if it is ever wanted back —
+see the commits before "Replace store-wide sweep with watchlist only".
 
 ## Files
 
 ```
-watcher.py                    main script
-matching.py                   size parsing and product classification
-sites.py                      store list
-test_matching.py              classification tests
-test_watcher.py               end-to-end drop-detection tests
-.github/workflows/watch.yml   the weekly automatic run
-data/REPORT.md                today's drops - this is the one to read
-data/latest_report.csv        same thing as a spreadsheet
-data/prices.db                price history (SQLite)
+watcher.py          the script
+watchlist.py        URL parsing and price helpers
+watchlist.txt       your items - edit this
+test_watchlist.py   tests
+data/REPORT.md      latest report - this is the one to read
+data/latest_report.csv
+data/prices.db      price history (SQLite)
 ```
 
-`data/` is committed on purpose — that is how the weekly run publishes
-its results and remembers yesterday's prices.
+`data/` is committed on purpose: it is both the published report and
+the baseline the next run compares against.
+
+## Tests
+
+```bash
+python3 test_watchlist.py
+```
 
 ## A note on fairness to these shops
 
-The script identifies itself honestly in its User-Agent, waits a second
-between requests, and reads only the public product feed every Shopify
-store publishes. Please leave those settings alone — it is the
-difference between a hobby price tracker and something that gets your
-IP banned.
-
-## Watching specific items
-
-`watchlist.txt` holds individual products you want tracked by name.
-Paste the URL straight from your browser, keeping the `?variant=...`
-part to pin one specific size:
-
-```
-https://www.brandstudio.pk/products/ami-ri-copy?variant=46794715758788   # my note
-```
-
-Drop the `?variant=` to watch every size of that product. Lines
-starting with `#` are ignored, and anything after the URL is your own
-note.
-
-Watchlist items differ from the store-wide sweep in two ways:
-
-- **They always appear in the report**, whether or not the price
-  moved, and whether or not they are in stock. The sweep only reports
-  drops.
-- **They are checked individually**, one small request each against
-  the storefront `.js` endpoint, instead of paging a whole catalogue.
-  That makes them far less likely to trip a store's rate limiting —
-  and they are checked first in each run, so if the sweep later gets
-  throttled, the items you care about most were already collected.
-
-If a pinned variant stops existing (the store deletes or re-creates
-the product), it is reported as an error rather than silently vanishing
-from the report.
+The script identifies itself honestly, waits between requests, and
+reads only the public product endpoint — a handful of small requests
+per run. Please leave those settings alone.

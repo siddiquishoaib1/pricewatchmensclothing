@@ -91,31 +91,33 @@ check("to_rupees none", W.to_rupees(None), None)
 check("to_rupees junk", W.to_rupees("abc"), None)
 
 
-# ---- pinned items always show ---------------------------------------
+# ---- every item is kept, nothing filtered ---------------------------
 import watcher as WT
 
 rows = [
-    # Pinned, no discount at all, and out of stock: must STILL appear.
+    # No discount at all and out of stock: must STILL appear.
     {"category": "watchlist", "site": "brandstudio.pk", "variant_id": "1",
      "title": "Pinned thing", "price": 7000.0, "compare_at": None,
      "available": 0, "url": "u", "size": "XL"},
-    # Unpinned, no discount: must be dropped.
-    {"category": "tee-polo", "site": "shop.pk", "variant_id": "2",
-     "title": "Random tee", "price": 1000.0, "compare_at": None,
-     "available": 1, "url": "u", "size": "XL"},
+    {"category": "watchlist", "site": "shop.pk", "variant_id": "2",
+     "title": "Another thing", "price": 1000.0, "compare_at": 2000.0,
+     "available": 1, "url": "u", "size": ""},
 ]
-items = WT.build_report(rows, {}, min_drop=10.0)
-check("pinned survives", [i["variant_id"] for i in items], ["1"])
+items = WT.build_report(rows, {})
+check("both kept", sorted(i["variant_id"] for i in items), ["1", "2"])
 
-# Even a high threshold must not hide a pinned item.
-items_high = WT.build_report(rows, {}, min_drop=99.0)
-check("pinned survives threshold",
-      [i["variant_id"] for i in items_high], ["1"])
+# An item that DID move reports its real drop, and sorts first.
+moved = WT.build_report(rows, {("brandstudio.pk", "1"): (10000.0, "t1")})
+check("real drop computed", moved[0]["real_drop"], 30.0)
+check("real drop sorts first", moved[0]["variant_id"], "1")
 
-# And a pinned item that DID move reports its real drop.
-items_moved = WT.build_report(
-    rows, {("brandstudio.pk", "1"): (10000.0, "t1")}, min_drop=10.0)
-check("pinned real drop", items_moved[0]["real_drop"], 30.0)
+# Claimed discount computed from compare_at.
+check("claimed drop", 
+      [i["claimed_drop"] for i in items if i["variant_id"] == "2"][0], 50.0)
+
+# Out-of-stock flag survives into the report.
+check("out of stock kept",
+      [i["available"] for i in items if i["variant_id"] == "1"][0], 0)
 
 
 if fails:
