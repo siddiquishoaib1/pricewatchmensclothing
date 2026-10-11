@@ -182,3 +182,32 @@ between requests, and reads only the public product feed every Shopify
 store publishes. Please leave those settings alone — it is the
 difference between a hobby price tracker and something that gets your
 IP banned.
+
+## Watching specific items
+
+`watchlist.txt` holds individual products you want tracked by name.
+Paste the URL straight from your browser, keeping the `?variant=...`
+part to pin one specific size:
+
+```
+https://www.brandstudio.pk/products/ami-ri-copy?variant=46794715758788   # my note
+```
+
+Drop the `?variant=` to watch every size of that product. Lines
+starting with `#` are ignored, and anything after the URL is your own
+note.
+
+Watchlist items differ from the store-wide sweep in two ways:
+
+- **They always appear in the report**, whether or not the price
+  moved, and whether or not they are in stock. The sweep only reports
+  drops.
+- **They are checked individually**, one small request each against
+  the storefront `.js` endpoint, instead of paging a whole catalogue.
+  That makes them far less likely to trip a store's rate limiting —
+  and they are checked first in each run, so if the sweep later gets
+  throttled, the items you care about most were already collected.
+
+If a pinned variant stops existing (the store deletes or re-creates
+the product), it is reported as an error rather than silently vanishing
+from the report.

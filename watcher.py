@@ -33,16 +33,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import matching as M
+import watchlist as W
 from sites import SITES, BLOCKED
 
 HERE = Path(__file__).resolve().parent
+WATCHLIST_PATH = HERE / "watchlist.txt"
 DATA_DIR = HERE / "data"
 DB_PATH = DATA_DIR / "prices.db"
 CSV_PATH = DATA_DIR / "latest_report.csv"
 MD_PATH = DATA_DIR / "REPORT.md"
 
-# Report sections, in order. Keys match matching.classify().
+# Report sections, in order. Keys match matching.classify(), plus
+# "watchlist" for individually pinned items.
 GROUPS = (
+    ("watchlist",    "Watchlist - your saved items"),
     ("tee-polo",     "T-shirts & polos - size XL"),
     ("casual-shirt", "Casual shirts - size XL or collar 17"),
     ("formal-shirt", "Formal shirts - collar 17"),
@@ -194,6 +198,70 @@ def previous_prices(conn, run_id):
             for r in rows}
 
 
+# ---------------------------------------------------------- watchlist
+
+def collect_watchlist(conn, run_id):
+    """Check each pinned item individually. Returns (rows, errors).
+
+    One small request per item against /products/<handle>.js, which is
+    gentle on the store compared with paging the whole catalogue.
+    """
+    if not WATCHLIST_PATH.exists():
+        return [], []
+
+    entries, problems = W.parse_file(
+        WATCHLIST_PATH.read_text(encoding="utf-8"))
+    rows = []
+    errors = [(f"watchlist line {n}", msg) for n, msg in problems]
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    for e in entries:
+        try:
+            data = fetch_json(W.js_url(e["base"], e["handle"]))
+        except Exception as exc:               # noqa: BLE001
+            errors.append((f"watchlist {e['handle']}", str(exc)))
+            print(f"  watchlist {e['handle'][:28]:30s} FAILED  {exc}",
+                  file=sys.stderr)
+            continue
+
+        title = data.get("title") or e["handle"]
+        wanted = e["variant"]
+        found = False
+
+        for v in data.get("variants") or []:
+            vid = str(v.get("id"))
+            if wanted and vid != wanted:
+                continue
+            found = True
+            label = v.get("title") or ""
+            rows.append({
+                "run_id": run_id,
+                "site": e["site"],
+                "variant_id": vid,
+                "handle": e["handle"],
+                # Keep the user's own note visible in the report.
+                "title": f"{title} ({label})" if label else title,
+                "category": "watchlist",
+                "size": M.normalise(label),
+                "price": W.to_rupees(v.get("price")),
+                "compare_at": W.to_rupees(v.get("compare_at_price")),
+                "available": 1 if v.get("available") else 0,
+                "url": e["url"],
+                "seen_at": now,
+            })
+
+        if wanted and not found:
+            errors.append((f"watchlist {e['handle']}",
+                           f"variant {wanted} no longer exists"))
+            print(f"  watchlist {e['handle'][:28]:30s} variant gone",
+                  file=sys.stderr)
+        else:
+            print(f"  watchlist {e['handle'][:28]:30s} ok")
+        time.sleep(REQUEST_PAUSE)
+
+    return rows, errors
+
+
 # ------------------------------------------------------------ collect
 
 def collect(conn, run_id, only_probe=False):
@@ -243,18 +311,24 @@ def collect(conn, run_id, only_probe=False):
         print(f"  {name:22s} {label}")
         time.sleep(REQUEST_PAUSE)
 
-    if not only_probe and rows:
-        conn.executemany(
-            """INSERT INTO observations
-               (run_id, site, variant_id, handle, title, category, size,
-                price, compare_at, available, url, seen_at)
-               VALUES (:run_id, :site, :variant_id, :handle, :title,
-                       :category, :size, :price, :compare_at, :available,
-                       :url, :seen_at)""",
-            rows,
-        )
-        conn.commit()
+    if not only_probe:
+        store_rows(conn, rows)
     return rows, errors
+
+
+def store_rows(conn, rows):
+    if not rows:
+        return
+    conn.executemany(
+        """INSERT INTO observations
+           (run_id, site, variant_id, handle, title, category, size,
+            price, compare_at, available, url, seen_at)
+           VALUES (:run_id, :site, :variant_id, :handle, :title,
+                   :category, :size, :price, :compare_at, :available,
+                   :url, :seen_at)""",
+        rows,
+    )
+    conn.commit()
 
 
 # ------------------------------------------------------------- report
@@ -263,16 +337,21 @@ def build_report(rows, prev, min_drop):
     """Attach real/claimed drops to rows and sort by severity."""
     out = []
     for r in rows:
-        if not r["available"]:
+        pinned = r["category"] == "watchlist"
+        # Pinned items always show, in stock or not, moved or not - the
+        # point of pinning one is to see where it stands every run.
+        if not r["available"] and not pinned:
             continue
         old_price, old_seen = prev.get((r["site"], r["variant_id"]),
                                        (None, None))
         real = M.pct_drop(old_price, r["price"])
         claimed = M.pct_drop(r["compare_at"], r["price"])
-        if real is None and claimed is None:
-            continue
-        if min_drop and (real or 0) < min_drop and (claimed or 0) < min_drop:
-            continue
+        if not pinned:
+            if real is None and claimed is None:
+                continue
+            if (min_drop and (real or 0) < min_drop
+                    and (claimed or 0) < min_drop):
+                continue
         item = dict(r)
         item["real_drop"] = real
         item["prev_price"] = old_price
@@ -321,6 +400,8 @@ def print_report(items, errors, is_first_run, min_drop):
                 claim = f"{i['claimed_drop']:.0f}%" if i["claimed_drop"] else "-"
                 was = i["prev_price"] if i["real_drop"] else i["compare_at"]
                 title = i["title"][:42]
+                if not i["available"]:
+                    title += " [OUT OF STOCK]"
                 print(f"    {real:>6}  {claim:>6}  {money(i['price']):>11}  "
                       f"{money(was):>11}  {i['site']:<18} {title}")
                 print(f"    {'':>6}  {'':>6}  {i['url']}")
@@ -371,6 +452,8 @@ def write_markdown(items, errors, is_first_run, min_drop):
             claim = f"{i['claimed_drop']:.0f}%" if i["claimed_drop"] else "-"
             was = i["prev_price"] if i["real_drop"] else i["compare_at"]
             title = i["title"].replace("|", "/")[:60]
+            if not i["available"]:
+                title += " - OUT OF STOCK"
             out.append(
                 f"| {real} | {claim} | {money(i['price'])} | {money(was)} "
                 f"| {i['site']} | [{title}]({i['url']}) |"
@@ -443,7 +526,15 @@ def main():
 
     print(f"\nRun #{run_id} - checking {len(SITES)} stores\n")
     prev = previous_prices(conn, run_id)
-    rows, errors = collect(conn, run_id)
+
+    # Pinned items first: they are cheap, and if the store-wide sweep
+    # later gets rate-limited we still have the items that matter most.
+    wl_rows, wl_errors = collect_watchlist(conn, run_id)
+    store_rows(conn, wl_rows)
+
+    rows, store_errors = collect(conn, run_id)
+    rows = wl_rows + rows
+    errors = wl_errors + store_errors
 
     conn.execute("UPDATE runs SET finished_at = ?, notes = ? WHERE id = ?",
                  (datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -462,12 +553,17 @@ def main():
     print(f"  Report written to {MD_PATH}")
     print(f"  CSV written to {CSV_PATH}\n")
 
-    # If every single store failed, the run collected nothing. Exit
+    # If every single store failed, the sweep collected nothing. Exit
     # non-zero so this surfaces as a failure instead of quietly
     # publishing an empty report that looks like "no deals today".
-    if len(errors) == len(SITES):
-        print("ERROR: every store failed - nothing was collected.",
+    # Watchlist errors are counted separately - a bad line in the
+    # watchlist should not mask a healthy sweep, or vice versa.
+    if len(store_errors) == len(SITES):
+        print("ERROR: every store failed - the sweep collected nothing.",
               file=sys.stderr)
+        if wl_rows:
+            print("       (watchlist items were still checked - see report)",
+                  file=sys.stderr)
         return 1
     return 0
 

@@ -1,0 +1,14 @@
+# Watchlist - one product URL per line.
+#
+# Paste the URL straight from the browser. Keep the ?variant=... part
+# to watch one specific size; drop it to watch every size.
+# Anything after the URL on the same line is treated as your own note.
+# Lines starting with # are ignored.
+#
+# These are checked individually every run and ALWAYS appear in the
+# report, whether or not the price moved - unlike the store-wide sweep,
+# which only reports drops.
+
+https://www.brandstudio.pk/products/loro-piana-w-copy?variant=46454953967812   # Ze-gna, XL / Black
+https://www.brandstudio.pk/products/ami-ri-copy?variant=46794715758788         # par-ada silver lo-go, XL / Black
+https://www.brandstudio.pk/products/gucci-30-copy?variant=44772096344260       # HUGO BOSS 1, XLarge / Brown
