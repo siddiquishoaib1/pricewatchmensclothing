@@ -52,9 +52,12 @@ GROUPS = (
 
 PAGE_SIZE = 250
 MAX_PAGES = 40           # safety stop: 10k products per store
-REQUEST_PAUSE = 1.0      # be polite to small shops
+REQUEST_PAUSE = 1.5      # be polite to small shops
 TIMEOUT = 30
-RETRIES = 3
+RETRIES = 5
+
+# Seconds to wait after an HTTP 429, per successive attempt.
+RATE_LIMIT_BACKOFF = (15, 30, 60, 90)
 
 UA = ("Mozilla/5.0 (compatible; personal-price-watcher/1.0; "
       "single user, 1 req/sec)")
@@ -63,7 +66,14 @@ UA = ("Mozilla/5.0 (compatible; personal-price-watcher/1.0; "
 # ----------------------------------------------------------- fetching
 
 def fetch_json(url):
-    """GET a URL and parse JSON. Raises on failure after retries."""
+    """GET a URL and parse JSON. Raises on failure after retries.
+
+    429 gets special treatment. Shopify throttles by client IP, and a
+    shared/datacentre IP (a CI runner, a VPN exit) can be throttled from
+    the very first request. A couple of seconds is nowhere near enough
+    to clear it, so we honour Retry-After when the server sends one and
+    otherwise back off substantially.
+    """
     last = None
     for attempt in range(RETRIES):
         try:
@@ -76,10 +86,29 @@ def fetch_json(url):
                                         context=ctx) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
             return json.loads(raw)
+
+        except urllib.error.HTTPError as exc:
+            last = exc
+            if exc.code == 429 and attempt < RETRIES - 1:
+                wait = RATE_LIMIT_BACKOFF[
+                    min(attempt, len(RATE_LIMIT_BACKOFF) - 1)]
+                try:
+                    hinted = int(exc.headers.get("Retry-After", "0"))
+                    wait = max(wait, min(hinted, 120))
+                except (TypeError, ValueError):
+                    pass
+                print(f"      rate limited, waiting {wait}s",
+                      file=sys.stderr)
+                time.sleep(wait)
+                continue
+            if attempt < RETRIES - 1:
+                time.sleep(2 * (attempt + 1))
+
         except Exception as exc:          # noqa: BLE001 - report any failure
             last = exc
             if attempt < RETRIES - 1:
                 time.sleep(2 * (attempt + 1))
+
     raise RuntimeError(f"{type(last).__name__}: {last}")
 
 
@@ -433,6 +462,15 @@ def main():
     print(f"  Report written to {MD_PATH}")
     print(f"  CSV written to {CSV_PATH}\n")
 
+    # If every single store failed, the run collected nothing. Exit
+    # non-zero so this surfaces as a failure instead of quietly
+    # publishing an empty report that looks like "no deals today".
+    if len(errors) == len(SITES):
+        print("ERROR: every store failed - nothing was collected.",
+              file=sys.stderr)
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

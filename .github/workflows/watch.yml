@@ -36,7 +36,11 @@ jobs:
       - name: Check prices
         run: python watcher.py --min-drop 10
 
+      # Runs even when the check step failed, so a run that was rate
+      # limited still publishes a report naming the stores that failed.
+      # The job itself still goes red.
       - name: Commit the report
+        if: always()
         run: |
           git config user.name  "price-watcher"
           git config user.email "actions@github.com"
