@@ -1,10 +1,10 @@
-name: Daily price check
+name: Weekly price check
 
 on:
   schedule:
-    # 04:10 UTC = 09:10 Pakistan time, daily.
+    # 04:10 UTC Monday = 09:10 Monday, Pakistan time.
     # GitHub queues scheduled jobs, so the real run may be 5-30 min late.
-    - cron: "10 4 * * *"
+    - cron: "10 4 * * 1"
   workflow_dispatch:        # lets you run it on demand from the Actions tab
 
 permissions:

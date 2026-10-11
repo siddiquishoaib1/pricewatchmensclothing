@@ -50,9 +50,9 @@ python3 watcher.py --probe          # check which stores respond
 
 Each run also writes `latest_report.csv`.
 
-## Automatic daily runs (already set up)
+## Automatic weekly runs (already set up)
 
-A GitHub Action runs this every morning at **09:10 Pakistan time**,
+A GitHub Action runs this every **Monday at 09:10 Pakistan time**,
 with no need for your computer to be on, and commits the result back
 to this repo.
 
@@ -60,7 +60,7 @@ to this repo.
 It renders as a table on github.com, so it works fine on a phone.
 
 To run it immediately instead of waiting: repo → **Actions** tab →
-*Daily price check* → **Run workflow**.
+*Weekly price check* → **Run workflow**.
 
 To change the time, edit the `cron` line in
 `.github/workflows/watch.yml`. It is in UTC, so Pakistan time minus
@@ -74,14 +74,14 @@ makes, and it only commits on days something actually changed.
 
 ## Running it yourself instead
 
-**macOS / Linux** — run daily at 9am. Open your crontab with
+**macOS / Linux** — run weekly on Monday at 9am. Open your crontab with
 `crontab -e` and add:
 
 ```
-0 9 * * * cd /full/path/to/pricewatch && /usr/bin/python3 watcher.py >> log.txt 2>&1
+0 9 * * 1 cd /full/path/to/pricewatch && /usr/bin/python3 watcher.py >> log.txt 2>&1
 ```
 
-**Windows** — open Task Scheduler → Create Basic Task → Daily →
+**Windows** — open Task Scheduler → Create Basic Task → Weekly →
 Start a program:
 
 - Program: `python`
@@ -151,13 +151,13 @@ matching.py                   size parsing and product classification
 sites.py                      store list
 test_matching.py              classification tests
 test_watcher.py               end-to-end drop-detection tests
-.github/workflows/watch.yml   the daily automatic run
+.github/workflows/watch.yml   the weekly automatic run
 data/REPORT.md                today's drops - this is the one to read
 data/latest_report.csv        same thing as a spreadsheet
 data/prices.db                price history (SQLite)
 ```
 
-`data/` is committed on purpose — that is how the daily run publishes
+`data/` is committed on purpose — that is how the weekly run publishes
 its results and remembers yesterday's prices.
 
 ## A note on fairness to these shops
