@@ -1,10 +1,9 @@
-# price history and generated reports are local data, not source
-prices.db
-latest_report.csv
-log.txt
+# The data/ folder IS committed on purpose - that is how the daily
+# GitHub Actions run publishes the report and keeps price history.
 
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 .DS_Store
+log.txt

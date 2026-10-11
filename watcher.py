@@ -36,8 +36,10 @@ import matching as M
 from sites import SITES, BLOCKED
 
 HERE = Path(__file__).resolve().parent
-DB_PATH = HERE / "prices.db"
-CSV_PATH = HERE / "latest_report.csv"
+DATA_DIR = HERE / "data"
+DB_PATH = DATA_DIR / "prices.db"
+CSV_PATH = DATA_DIR / "latest_report.csv"
+MD_PATH = DATA_DIR / "REPORT.md"
 
 PAGE_SIZE = 250
 MAX_PAGES = 40           # safety stop: 10k products per store
@@ -126,6 +128,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 
 def connect():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
@@ -297,8 +300,62 @@ def print_report(items, errors, is_first_run, min_drop):
     print("=" * 100 + "\n")
 
 
+def write_markdown(items, errors, is_first_run, min_drop):
+    """Write data/REPORT.md - this is what renders on GitHub/phone."""
+    MD_PATH.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%a %d %b %Y, %H:%M UTC")
+    out = [f"# Price drops - shirts XL / shoes 45", "",
+           f"_Last checked: {stamp}_", ""]
+
+    if is_first_run:
+        out += [
+            "> **First run.** No price history yet, so the *Real* column",
+            "> is empty. Everything below is the store's own claimed",
+            "> discount. Real drops appear from the next run onward.", "",
+        ]
+
+    out += [
+        "**Real** = how far the price actually fell since the last check.  ",
+        "**Claim** = discount off the store's own crossed-out original.  ",
+        "A big *Claim* with no *Real* movement usually means an inflated "
+        "original price.", "",
+    ]
+
+    for group, label in (("shirt", "Shirts - size XL"),
+                         ("shoe", "Shoes - size 45")):
+        chunk = [i for i in items if i["category"] == group]
+        out += [f"## {label} ({len(chunk)})", ""]
+        if not chunk:
+            out += ["_Nothing met the threshold this run._", ""]
+            continue
+        out += ["| Real | Claim | Now | Was | Store | Item |",
+                "|---:|---:|---:|---:|---|---|"]
+        for i in chunk[:40]:
+            real = f"**{i['real_drop']:.0f}%**" if i["real_drop"] else "-"
+            claim = f"{i['claimed_drop']:.0f}%" if i["claimed_drop"] else "-"
+            was = i["prev_price"] if i["real_drop"] else i["compare_at"]
+            title = i["title"].replace("|", "/")[:60]
+            out.append(
+                f"| {real} | {claim} | {money(i['price'])} | {money(was)} "
+                f"| {i['site']} | [{title}]({i['url']}) |"
+            )
+        out.append("")
+
+    if errors:
+        out += [f"## Stores that failed this run ({len(errors)})", ""]
+        out += [f"- `{n}` - {e[:80]}" for n, e in errors] + [""]
+
+    out += ["---", "",
+            f"Threshold: real or claimed drop >= {min_drop:.0f}%.  ",
+            "Not covered (blocked or no feed): "
+            + ", ".join(f"`{n}`" for n, _, _ in BLOCKED) + ".", ""]
+
+    MD_PATH.write_text("\n".join(out), encoding="utf-8")
+
+
 def write_csv(items):
     import csv
+    CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CSV_PATH, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["category", "site", "title", "size", "price_now",
@@ -359,10 +416,15 @@ def main():
     conn.commit()
 
     items = build_report(rows, prev, args.min_drop)
-    print_report(items, errors, not prev, args.min_drop)
-    if items:
-        write_csv(items)
-        print(f"  CSV written to {CSV_PATH}\n")
+    is_first = not prev
+    print_report(items, errors, is_first, args.min_drop)
+
+    # Always write both, even when empty, so the committed report in the
+    # repo reflects today rather than silently showing stale results.
+    write_markdown(items, errors, is_first, args.min_drop)
+    write_csv(items)
+    print(f"  Report written to {MD_PATH}")
+    print(f"  CSV written to {CSV_PATH}\n")
 
 
 if __name__ == "__main__":
